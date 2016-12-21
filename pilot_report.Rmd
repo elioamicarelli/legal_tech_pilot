@@ -1,0 +1,213 @@
+---
+title: |
+  | Automating the classification of legal questions
+  | A preliminary assessment
+author: "Elio Amicarelli"
+date: "doc ref: COBR01016"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE}
+# load libraries
+library(knitr)
+library (tm)
+library(xgboost)
+library(car)
+library(Matrix)
+library(data.table)
+library(caret)
+library(pander)
+
+# import cleaned data
+data<-read.csv("data_clean.csv")
+
+# take sorted names and values
+hx<-names(sort(table(data$Jurisdiction), decreasing=T))
+hy<-as.vector(sort(table(data$Jurisdiction), decreasing=T))
+
+```
+
+## Overview
+
+In this pilot study a supervised Machine Learning approach is used in order to predict the expertise class (Jurisdiction) of legal questions asked by customers via the legal web service jurofoon.nl. Using a small subset of the data and a simple approach we achieve a rate of 78% correct predictions. The results are very encouraging and clearly highlight the possibility to automate the categorization of legal questions submitted by ARAG's clients via jurofoon.nl.
+
+## Introduction
+
+Modern legal companies can be easily reached by customers via phone or the internet. Customers ask questions, the questions are processed and eventually these questions are followed by the formulation of legal advices. At the moment of writing, the website jurofoon.nl adopts manual procedures in order to processes and sort the questions submitted by its cutomers. Implementing an automated system for the elaboration and classification of questions would significantly speed up the functioning of the legal service. In this report we provide evidences supporting the feasibility of this system.
+
+## Explaining the approach to a general audience
+
+How do machines learn to recognize patterns in human texts and to associate these texts to correct categories? Broadly speaking there are two main approaches that can be used in order to let machine
+perform this complicated task, namely supervised and unsupervised learning. In supervised learning, we provide many examples of pre-categorized texts and train the machine to identify the existing relationships between texts and categories. After these relationships have been learned, the machine is able to independently assigns categories to new texts. On the contrary, when we adopt an unsupervised learning
+approach, we do not provide past examples of text-category associations; instead we directly ask the
+machine to identify potential categories in a set of texts with the need for the analyst to constantly and
+carefully check whether the identified categories make sense or not. In this exercise we use a supervised
+approach relying on an algorithm called extreme gradient boosting machines.
+
+## Data
+
+_Step 1 - Extracting language features_
+
+The raw data we use for this exercise is a set of legal questions. Each question is associated with further details about the related domain of legal expertise and its source. Table 1 shows an example of the typical observation contained in the raw data.
+
+```{r echo=FALSE, message=FALSE}
+# table 1
+t1<-as.data.frame(cbind("Verbintenissenrecht (algemeen) - (overig)","Reactie via formulier op
+jurofoon.nl", "Wij hebben onenigheid met de buren over gezamelijke schutting. Hij communiceerd direkt via zijn rechtsbijstand. Hoe kan ik het best reageren / wat zijn mijn rechten ?"))
+colnames(t1)<-c("Jurisdiction (legal expertise)","Source","Summary")
+pander(t1, split.cells = 30, split.table = Inf, caption = "Table 1. Example of an observation from the data", justify="left")
+
+```
+
+Before moving to the analysis we first transformed the description contained in the Summary field in
+quantifiable data. For this quick exercise a simple transformation has been implemented: after removing
+useless information (e.g. stop words), we stored information about the frequency of appearance for each word contained in each Summary.
+
+_Step 2 – Subsetting the data_
+
+For this quick exercise we decided to focus only on those questions collected via the jurofoon.nl website and
+that have a valid specification for the Jurisdiction (legal expertise) field. The graph in _Figure 1_ shows the
+frequency for the 29 different legal expertise categories available. For clarity of visualization the categories
+have been numbered from 1 to 29, _Table 3_ in the Appendix shows the correspondence between each number and the respective category.
+
+```{r echo=FALSE, fig.width=5, fig.height=4, fig.align='center'}
+
+## plot frequencies
+plot(hy, pch=16, xaxt="n", type="h", col="blue", ylab="frequency", xlab="category", main="Frequency of questions by Jurisdiction")
+axis(1,at=1:29,labels=1:29)
+
+## keep only first 5 categories
+vars<-hx[1:5]
+dt<-data[data$Jurisdiction%in%vars,]
+dt$Jurisdiction<-as.character(dt$Jurisdiction)
+
+```
+
+Since the algorithm needs enough data in order to learn the relationships between text and categories, we
+are going to focus only on those categories having more than 200 questions in the dataset, which are the
+following:
+
+- "Verbintenissenrecht (algemeen) - (overig)"
+- "Arbeidsrecht - (overig)"
+- "Personen- en familierecht - (overig)"
+- "Alimentatiezaken - Alimentatie"
+- "Huurrecht - Huurzaken particulieren"
+
+To sum up, we are going to build a system that given a question coming from one of the abovementioned
+categories, is able to predict to which category the question actually belongs to. As already said we have
+chosen these categories based on the amount of data available and with the aim of providing the client with
+a quick example of what can be achieved by harnessing the power of predictive modelling. However, this approach can be easily extended to all other categories by using more data and more resources.
+
+## Analysis and results
+
+The dataset we are going to use for this analysis contains 2426 observations. From these 2426 observations, 400 randomly selected observations are not going to be fed into the algorithm during the learning phase. This test set of 400 observations will be used only to test the predictive performance of the algorithm on
+new questions. Extreme Gradient Boosting Machines have been trained on the data described in the previous section containing 2026 observations and the best model has been selected via 10-fold stratified cross-validation.
+
+_Table 2_ shows the actual and predicted classes for the observations contained in the test set. Overall, the model correctly predicted 78% of the 400 observations contained in the test set. As can be seen, the model does a fairly good job in predicting all the 5 classes.
+
+```{r echo=FALSE, message = FALSE}
+## Recode response to numeric classes
+dt$response<-recode(dt$Jurisdiction,"'Verbintenissenrecht (algemeen) - (overig)' = 1;
+                      'Arbeidsrecht - (overig)' = 2;
+                      'Alimentatiezaken - Alimentatie'=3;
+                      'Huurrecht - Huurzaken particulieren'=4;
+                      'Personen- en familierecht - (overig)'=5")
+dt<-dt[,c(1,6:ncol(dt))]
+
+## train/test split
+set.seed(1432)
+testid<-sample(dt$X, 400, replace=FALSE)
+dt.test<-dt[dt$X%in%testid,]
+dt.train<-dt[!dt$X%in%testid,]
+
+## prepare data for xgb
+dt.train[] <- lapply(dt.train, as.numeric)
+y<-as.numeric(dt.train$response)
+y<-y-1
+m<-data.matrix(dt.train[, !colnames(dt.train) %in% c("X","response")], rownames.force = NA)
+xgbmat<-xgb.DMatrix(m, label=y)
+#
+dt.test[] <- lapply(dt.test, as.numeric)
+yt<-as.numeric(dt.test$response)
+yt<-yt-1
+mt<-data.matrix(dt.test[, !colnames(dt.test) %in% c("X","response")], rownames.force = NA)
+xgbmattest<-xgb.DMatrix(mt, label=yt)
+
+## Train extreme gradient boosting
+#xgbtrain <- xgb.cv(data = xgbmat, max.depth = 4,
+#                   nround=3000, eta=0.015,  
+#                   gamma = 1,
+#                   colsample_bytree=1,
+#                   min_child_weight = 1,
+#                   nfold = 10, stratified=T, 
+#                   prediction=TRUE, metrics='merror',
+#                   objective='multi:softmax', num_class = 5)
+
+load("xgbtrain.rda")
+
+#xgbmodel <- xgboost(data = xgbmat, max.depth = 2,
+#                    nround=2162, eta=0.015,  
+#                    gamma = 1,
+#                    colsample_bytree=1,
+#                    min_child_weight = 1,
+#                    nfold = 10, stratified=T, 
+#                    prediction=TRUE, metrics='merror',
+#                    objective='multi:softmax', num_class = 5)"
+
+load("xgbmodel.rda")
+
+## Show confusion matrix (table 2)
+predicted<-predict(xgbmodel,xgbmattest)
+confmat<-confusionMatrix(predicted,yt)
+kable(confmat$table,caption = "Columns: observed class, Rows: predicted class.")
+
+```
+
+Based on these results we expect that even this very preliminary model if implemented would be able to correctly predict approximately 78% of the future questions that will be received by jurofoon.nl if they belong to one of the five categories used in this exercise. With additional data and resources this predictive approach can be
+generalized to all the categories currently available in the database and the accuracy can be dramatically improved as well.
+
+\clearpage
+
+## Appendix
+
+```{r echo=FALSE}
+# table 3
+a<-seq(1:29)
+b<-c("Verbintenissenrecht (algemeen) - (overig)",
+"Arbeidsrecht - (overig)",
+"Personen- en familierecht - (overig)",
+"Alimentatiezaken - Alimentatie",
+"Huurrecht - Huurzaken particulieren",
+"Personen- en familierecht - Echtscheiding",
+"Arbeidsrecht - Ontslag",
+"Huurrecht - (overig)",
+"Verbintenissenrecht (algemeen) - Incasso",
+"Strafrecht - (overig)",
+"Bestuursrecht - (overig)",
+"Consumentenrecht - (overig)",
+"Personen- en familierecht - Erfrecht",
+"Aansprakelijkheidsrecht - (overig)",
+"Sociaal Verzekeringsrecht - (overig)",
+"Insolventierecht - (overig)",
+"Huurrecht - Huurzaken bedrijven",
+"Algemene praktijk MKB en zakelijk - (overig)",
+"Fiscale zaken - (overig)",
+"Insolventierecht - Faillissementen",
+"Ambtenarenrecht - (overig)",
+"Vreemdelingenrecht - (overig)",
+"Intellectueel eigendomsrecht - Merkenrecht",
+"Europees en internationaal recht - (overig)",
+"Aansprakelijkheidsrecht - Letselschade",
+"Auteursrecht - (overig)",
+"Banken en effecten - (overig)",
+"Gezondheidsrecht - (overig)",
+"Bouwrecht - (overig)")
+
+t3<-as.data.frame(cbind(a,b))
+colnames(t3)<-c("Category id", "Category full description")
+pander(t3, split.cells = 40, split.table = Inf, caption = "Table 3. Complementary information for Figure 1", justify="left")
+```
