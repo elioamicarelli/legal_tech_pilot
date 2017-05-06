@@ -6,8 +6,6 @@ Despite the data came from different sources and despite the fact that I do not 
 
 The reporting task this time was also quite interesting: I had to explain to a non technical audience (the start-up people) how to go along in explaining technical matters (the automation of classification) to their non technical audience (the administrators financing the start-up). The result of this tongue-twister is the report named "pilot_report.pdf" contained in this repository.
 
-This pilot idea was a success and ARAG decided to commission the implementation of this idea to a dutch company called bright cape.
-
 In this repository you will find the following items:
 
 - pilot_report.pdf. The report of this project in pdf format
